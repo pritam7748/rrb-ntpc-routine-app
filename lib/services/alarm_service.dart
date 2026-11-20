@@ -160,6 +160,7 @@ class AlarmService {
   }
 
   /// Test alarm: schedules an alarm X seconds from now
+  /// Test alarm: schedules an alarm X seconds from now
   static Future<void> testAlarmAfterSeconds(int seconds, {String? title, String? category}) async {
     const testId = 99999;
     await Alarm.stop(testId);
@@ -185,4 +186,13 @@ class AlarmService {
 
     await Alarm.set(alarmSettings: alarmSettings);
   }
+
+  /// Trigger alarm ringing immediately
+  static Future<void> startAlarmRinging({
+    required String title,
+    required String category,
+  }) async {
+    await testAlarmAfterSeconds(1, title: title, category: category);
+  }
+}
 }
