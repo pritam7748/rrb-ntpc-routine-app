@@ -195,4 +195,3 @@ class AlarmService {
     await testAlarmAfterSeconds(1, title: title, category: category);
   }
 }
-}
