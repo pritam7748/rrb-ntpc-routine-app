@@ -14,6 +14,8 @@ dependencies:
   local_auth: ^2.2.0
   audioplayers: ^6.0.0
   flutter_local_notifications: ^17.2.2
+  alarm: any
+  permission_handler: any
   uuid: ^4.4.0
   google_fonts: ^6.2.1
 
