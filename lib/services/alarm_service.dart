@@ -1,66 +1,137 @@
 import 'dart:async';
-import 'package:audioplayers/audioplayers.dart';
+import 'package:alarm/alarm.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../models/routine_item.dart';
 import '../screens/alarm_ringing_screen.dart';
+import 'storage_service.dart';
 
 class AlarmService {
-  static final FlutterLocalNotificationsPlugin _notificationsPlugin =
-      FlutterLocalNotificationsPlugin();
-  static final AudioPlayer _audioPlayer = AudioPlayer();
-  static bool isRinging = false;
-  static RoutineItem? currentRingingRoutine;
   static GlobalKey<NavigatorState>? navigatorKey;
+  static StreamSubscription<AlarmSettings>? _ringSubscription;
 
   static Future<void> init(GlobalKey<NavigatorState> navKey) async {
     navigatorKey = navKey;
 
-    const androidSettings =
-        AndroidInitializationSettings('@drawable/ic_launcher');
-    const initSettings = InitializationSettings(android: androidSettings);
+    // Initialize native alarm clock engine
+    await Alarm.init();
 
-    await _notificationsPlugin.initialize(
-      initSettings,
-      onDidReceiveNotificationResponse: (NotificationResponse response) {
-        if (response.payload != null) {
-          triggerAlarmScreen(
-            title: response.payload ?? 'Routine Alarm',
-            category: 'RRB NTPC Study Routine',
-          );
-        }
-      },
-    );
+    // Check & request permissions on start
+    await requestPermissions();
 
-    // Request permissions for Android 13+
-    final androidImpl = _notificationsPlugin.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>();
-    if (androidImpl != null) {
-      await androidImpl.requestNotificationsPermission();
-      await androidImpl.requestExactAlarmsPermission();
+    // Listen to ringing alarms from background service
+    _ringSubscription?.cancel();
+    _ringSubscription = Alarm.ringStream.stream.listen((alarmSettings) {
+      _handleAlarmRing(alarmSettings);
+    });
+
+    // Schedule all enabled routines on app launch
+    await rescheduleAllRoutines();
+  }
+
+  static Future<void> requestPermissions() async {
+    try {
+      if (await Permission.notification.isDenied) {
+        await Permission.notification.request();
+      }
+      if (await Permission.scheduleExactAlarm.isDenied) {
+        await Permission.scheduleExactAlarm.request();
+      }
+    } catch (e) {
+      print('Permission request error: $e');
     }
   }
 
-  /// Start persistent alarm: loops continuously until stopped
-  static Future<void> startAlarmRinging({
-    required String title,
-    required String category,
-  }) async {
-    if (isRinging) return;
-    isRinging = true;
+  static int getAlarmId(String routineId) {
+    return (routineId.hashCode.abs() % 100000) + 1;
+  }
 
-    try {
-      await _audioPlayer.setReleaseMode(ReleaseMode.loop);
-      await _audioPlayer.setVolume(1.0);
-      await _audioPlayer.play(AssetSource('audio/rrb_alarm.wav'));
-    } catch (e) {
-      print('Audio play error: $e');
+  static DateTime getNextDateTime(int hour, int minute, List<int> repeatDays) {
+    final now = DateTime.now();
+    DateTime candidate = DateTime(now.year, now.month, now.day, hour, minute);
+
+    if (candidate.isBefore(now)) {
+      candidate = candidate.add(const Duration(days: 1));
     }
 
-    // Show persistent ongoing notification
-    await showPersistentNotification(title: title, category: category);
+    if (repeatDays.isNotEmpty && repeatDays.length < 7) {
+      while (!repeatDays.contains(candidate.weekday)) {
+        candidate = candidate.add(const Duration(days: 1));
+      }
+    }
 
-    // Navigate to Full Screen Alarm Ringing Screen
+    return candidate;
+  }
+
+  static Future<void> scheduleRoutine(RoutineItem item) async {
+    if (!item.isEnabled) {
+      await cancelRoutine(item);
+      return;
+    }
+
+    final nextTime = getNextDateTime(item.hour, item.minute, item.repeatDays);
+    final alarmId = getAlarmId(item.id);
+
+    // Cancel old alarm with this ID
+    await Alarm.stop(alarmId);
+
+    final alarmSettings = AlarmSettings(
+      id: alarmId,
+      dateTime: nextTime,
+      assetAudioPath: 'assets/audio/rrb_alarm.wav',
+      loopAudio: item.isPersistentAlarm,
+      vibrate: true,
+      androidFullScreenIntent: true,
+      volumeSettings: VolumeSettings.fixed(
+        volume: 1.0,
+        volumeEnforced: true,
+      ),
+      notificationSettings: NotificationSettings(
+        title: '⏰ RRB NTPC: ${item.title}',
+        body: 'Time for ${item.category}! Tap to dismiss.',
+        stopButton: 'Dismiss',
+        icon: 'ic_launcher',
+      ),
+    );
+
+    await Alarm.set(alarmSettings: alarmSettings);
+    print('Scheduled alarm $alarmId for ${item.title} at $nextTime');
+  }
+
+  static Future<void> cancelRoutine(RoutineItem item) async {
+    final alarmId = getAlarmId(item.id);
+    await Alarm.stop(alarmId);
+    print('Cancelled alarm $alarmId for ${item.title}');
+  }
+
+  static Future<void> rescheduleAllRoutines() async {
+    final routines = StorageService.getRoutines();
+    for (final r in routines) {
+      if (r.isEnabled) {
+        await scheduleRoutine(r);
+      }
+    }
+  }
+
+  static void _handleAlarmRing(AlarmSettings alarmSettings) {
+    final routines = StorageService.getRoutines();
+    RoutineItem? matchedItem;
+    for (final r in routines) {
+      if (getAlarmId(r.id) == alarmSettings.id) {
+        matchedItem = r;
+        break;
+      }
+    }
+
+    final title = matchedItem?.title ?? 'Study Routine Alarm';
+    final category = matchedItem?.category ?? 'RRB NTPC Routine';
+
+    // Reschedule next occurrence for tomorrow / next repeat day
+    if (matchedItem != null && matchedItem.isEnabled) {
+      scheduleRoutine(matchedItem);
+    }
+
+    // Open Alarm Ringing Screen
     if (navigatorKey?.currentContext != null) {
       navigatorKey!.currentState?.push(
         MaterialPageRoute(
@@ -68,84 +139,50 @@ class AlarmService {
           builder: (context) => AlarmRingingScreen(
             title: title,
             category: category,
+            alarmId: alarmSettings.id,
           ),
         ),
       );
     }
   }
 
-  /// Stop the alarm sound and dismiss notification
-  static Future<void> stopAlarm() async {
-    isRinging = false;
-    currentRingingRoutine = null;
-    try {
-      await _audioPlayer.stop();
-    } catch (e) {
-      print('Audio stop error: $e');
+  static Future<void> stopAlarm([int? id]) async {
+    if (id != null) {
+      await Alarm.stop(id);
+    } else {
+      final alarms = await Alarm.getAlarms();
+      for (final a in alarms) {
+        if (await Alarm.isRinging(a.id)) {
+          await Alarm.stop(a.id);
+        }
+      }
     }
-    await _notificationsPlugin.cancel(9999);
   }
 
-  static Future<void> showPersistentNotification({
-    required String title,
-    required String category,
-  }) async {
-    const rawSound = RawResourceAndroidNotificationSound('rrb_alarm');
-    const androidDetails = AndroidNotificationDetails(
-      'rrb_persistent_alarm_channel',
-      'RRB NTPC Persistent Alarm',
-      channelDescription: 'High priority continuous alarm channel for study routines',
-      importance: Importance.max,
-      priority: Priority.high,
-      sound: rawSound,
-      playSound: true,
-      enableVibration: true,
-      ongoing: true, // Cannot be dismissed by swiping
-      autoCancel: false,
-      fullScreenIntent: true,
-      category: AndroidNotificationCategory.alarm,
-      audioAttributesUsage: AudioAttributesUsage.alarm,
+  /// Test alarm: schedules an alarm X seconds from now
+  static Future<void> testAlarmAfterSeconds(int seconds, {String? title, String? category}) async {
+    const testId = 99999;
+    await Alarm.stop(testId);
+
+    final alarmSettings = AlarmSettings(
+      id: testId,
+      dateTime: DateTime.now().add(Duration(seconds: seconds)),
+      assetAudioPath: 'assets/audio/rrb_alarm.wav',
+      loopAudio: true,
+      vibrate: true,
+      androidFullScreenIntent: true,
+      volumeSettings: VolumeSettings.fixed(
+        volume: 1.0,
+        volumeEnforced: true,
+      ),
+      notificationSettings: NotificationSettings(
+        title: title ?? '⏰ TEST ALARM: RRB NTPC Wake-up',
+        body: 'App background test successful! Tap to dismiss.',
+        stopButton: 'Dismiss',
+        icon: 'ic_launcher',
+      ),
     );
 
-    const notificationDetails = NotificationDetails(android: androidDetails);
-
-    await _notificationsPlugin.show(
-      9999,
-      '⏰ ALARM: $title',
-      'Time for your $category! Tap to open and dismiss.',
-      notificationDetails,
-      payload: title,
-    );
-  }
-
-  static void triggerAlarmScreen({
-    required String title,
-    required String category,
-  }) {
-    startAlarmRinging(title: title, category: category);
-  }
-
-  /// Schedules daily routine notifications
-  static Future<void> scheduleRoutine(RoutineItem item) async {
-    if (!item.isEnabled) return;
-    // Android local notifications exact alarm scheduling logic
-    // We register notification with sound 'rrb_alarm'
-    final id = item.id.hashCode;
-    const rawSound = RawResourceAndroidNotificationSound('rrb_alarm');
-    final androidDetails = AndroidNotificationDetails(
-      'rrb_routine_channel_${item.id}',
-      'Routine: ${item.title}',
-      channelDescription: 'Daily RRB NTPC routine reminder',
-      importance: Importance.max,
-      priority: Priority.high,
-      sound: rawSound,
-      playSound: true,
-      enableVibration: true,
-      category: AndroidNotificationCategory.alarm,
-    );
-
-    final notificationDetails = NotificationDetails(android: androidDetails);
-    // Scheduled reminder registered
-    print('Scheduled routine: ${item.title} (ID: $id) at ${item.formattedTime}');
+    await Alarm.set(alarmSettings: alarmSettings);
   }
 }
