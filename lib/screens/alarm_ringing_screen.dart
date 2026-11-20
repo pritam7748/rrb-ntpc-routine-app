@@ -7,11 +7,13 @@ import 'study_log_screen.dart';
 class AlarmRingingScreen extends StatefulWidget {
   final String title;
   final String category;
+  final int? alarmId; // ✅ যুক্ত করা হয়েছে
 
   const AlarmRingingScreen({
     super.key,
     required this.title,
     required this.category,
+    this.alarmId, // ✅ যুক্ত করা হয়েছে
   });
 
   @override
@@ -54,7 +56,8 @@ class _AlarmRingingScreenState extends State<AlarmRingingScreen>
   }
 
   Future<void> _dismissAlarm({bool openStudyLog = false}) async {
-    await AlarmService.stopAlarm();
+    // ✅ নির্দিষ্ট অ্যালার্মটি সাথে সাথে ব্যাকগ্রাউন্ড সার্ভিসসহ বন্ধ হবে
+    await AlarmService.stopAlarm(widget.alarmId);
     if (mounted) {
       if (openStudyLog) {
         Navigator.of(context).pushReplacement(
