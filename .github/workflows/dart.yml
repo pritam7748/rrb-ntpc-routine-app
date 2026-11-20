@@ -29,16 +29,20 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Print Flutter & Dart Version
+        run: flutter --version
+
       - name: Install Dependencies
         run: flutter pub get
 
       - name: Build Android Release APK
-        run: flutter build apk --release --no-tree-shake-icons
+        run: flutter build apk --release --no-tree-shake-icons --android-skip-build-dependency-validation
 
       - name: Rename APK for Easy Download
         run: |
           mkdir -p build_output
           cp build/app/outputs/flutter-apk/app-release.apk build_output/RRB_NTPC_Routine_App.apk
+          ls -la build_output
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
