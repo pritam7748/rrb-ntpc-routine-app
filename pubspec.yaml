@@ -15,7 +15,7 @@ dependencies:
   audioplayers: ^6.0.0
   flutter_local_notifications: ^17.2.2
   alarm: any
-  permission_handler: any
+  permission_handler: ^11.3.1 # ✅ শুধু এখানে ^11.3.1 করে দিন
   uuid: ^4.4.0
   google_fonts: ^6.2.1
 
